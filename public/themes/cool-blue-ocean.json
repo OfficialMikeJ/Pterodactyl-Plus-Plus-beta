@@ -1,0 +1,28 @@
+{
+    "id": "cool-blue-ocean",
+    "name": "Cool Blue Ocean",
+    "description": "Deep sea blues with a cool, calm glass finish.",
+    "author": "Touch Down Hosting",
+    "colors": {
+        "brand": {
+            "50": "#eff9ff",
+            "100": "#daf1ff",
+            "200": "#b3e3ff",
+            "300": "#75cdff",
+            "400": "#2cb2ff",
+            "500": "#0996f2",
+            "600": "#0077cf",
+            "700": "#005fa8",
+            "800": "#05508a",
+            "900": "#0a4372"
+        },
+        "background": "radial-gradient(1200px 800px at 85% -10%, rgba(9, 150, 242, 0.16), transparent 60%), radial-gradient(1000px 700px at -10% 110%, rgba(9, 150, 242, 0.1), transparent 55%), linear-gradient(160deg, #05080d 0%, #0a1220 55%, #060b14 100%)",
+        "backgroundSolid": "#070c14",
+        "surface": "rgba(13, 22, 34, 0.6)",
+        "surfaceStrong": "rgba(8, 15, 25, 0.82)",
+        "surfaceBorder": "rgba(163, 216, 255, 0.1)",
+        "glow": "rgba(9, 150, 242, 0.3)",
+        "text": "#f2f8fd",
+        "textMuted": "#8fa5b8"
+    }
+}

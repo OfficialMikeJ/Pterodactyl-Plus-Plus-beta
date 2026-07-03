@@ -1,0 +1,28 @@
+{
+    "id": "cool-silk-purple",
+    "name": "Cool Silk Purple",
+    "description": "Silky royal purples wrapped in midnight glass.",
+    "author": "Touch Down Hosting",
+    "colors": {
+        "brand": {
+            "50": "#faf5ff",
+            "100": "#f3e8ff",
+            "200": "#e9d5ff",
+            "300": "#d8b4fe",
+            "400": "#c084fc",
+            "500": "#a855f7",
+            "600": "#9333ea",
+            "700": "#7e22ce",
+            "800": "#6b21a8",
+            "900": "#581c87"
+        },
+        "background": "radial-gradient(1200px 800px at 85% -10%, rgba(168, 85, 247, 0.15), transparent 60%), radial-gradient(1000px 700px at -10% 110%, rgba(168, 85, 247, 0.09), transparent 55%), linear-gradient(160deg, #0a070d 0%, #130f1c 55%, #0d0812 100%)",
+        "backgroundSolid": "#0d0a12",
+        "surface": "rgba(22, 17, 30, 0.6)",
+        "surfaceStrong": "rgba(15, 11, 21, 0.82)",
+        "surfaceBorder": "rgba(233, 213, 255, 0.09)",
+        "glow": "rgba(168, 85, 247, 0.3)",
+        "text": "#f8f5fc",
+        "textMuted": "#a396b3"
+    }
+}

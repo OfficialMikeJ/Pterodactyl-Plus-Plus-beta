@@ -1,0 +1,28 @@
+{
+    "id": "cool-green-mint",
+    "name": "Cool Green Mint",
+    "description": "Fresh mint greens over a dark forest glass.",
+    "author": "Touch Down Hosting",
+    "colors": {
+        "brand": {
+            "50": "#effef7",
+            "100": "#dafeee",
+            "200": "#b8fadd",
+            "300": "#81f4c3",
+            "400": "#43e5a0",
+            "500": "#1acd81",
+            "600": "#0fa968",
+            "700": "#108554",
+            "800": "#126945",
+            "900": "#11563a"
+        },
+        "background": "radial-gradient(1200px 800px at 85% -10%, rgba(26, 205, 129, 0.14), transparent 60%), radial-gradient(1000px 700px at -10% 110%, rgba(26, 205, 129, 0.09), transparent 55%), linear-gradient(160deg, #060a08 0%, #0c1410 55%, #08100b 100%)",
+        "backgroundSolid": "#080e0b",
+        "surface": "rgba(14, 24, 19, 0.6)",
+        "surfaceStrong": "rgba(9, 17, 13, 0.82)",
+        "surfaceBorder": "rgba(184, 250, 221, 0.09)",
+        "glow": "rgba(26, 205, 129, 0.3)",
+        "text": "#f2fdf8",
+        "textMuted": "#8fb8a5"
+    }
+}

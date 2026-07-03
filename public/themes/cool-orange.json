@@ -1,0 +1,28 @@
+{
+    "id": "cool-orange",
+    "name": "Cool Orange",
+    "description": "The signature Touch Down Hosting look. Black, white and orange.",
+    "author": "Touch Down Hosting",
+    "colors": {
+        "brand": {
+            "50": "#fff5eb",
+            "100": "#ffe8d1",
+            "200": "#ffd0a3",
+            "300": "#ffb266",
+            "400": "#ff9633",
+            "500": "#ff7a00",
+            "600": "#e56700",
+            "700": "#c65500",
+            "800": "#9a4200",
+            "900": "#7a3300"
+        },
+        "background": "radial-gradient(1200px 800px at 85% -10%, rgba(255, 122, 0, 0.14), transparent 60%), radial-gradient(1000px 700px at -10% 110%, rgba(255, 122, 0, 0.09), transparent 55%), linear-gradient(160deg, #0a0b0d 0%, #101214 55%, #0d0b08 100%)",
+        "backgroundSolid": "#0c0d0f",
+        "surface": "rgba(18, 20, 24, 0.6)",
+        "surfaceStrong": "rgba(13, 15, 18, 0.82)",
+        "surfaceBorder": "rgba(255, 255, 255, 0.09)",
+        "glow": "rgba(255, 122, 0, 0.3)",
+        "text": "#f5f7fa",
+        "textMuted": "#9aa3ad"
+    }
+}
