@@ -1,0 +1,341 @@
+#!/bin/bash
+set -euo pipefail
+
+#############################################################################
+#                                                                           #
+#  Touch Down Hosting Panel Installer                                       #
+#                                                                           #
+#  Installs the Touch Down Hosting panel (a Pterodactyl 1.14.1 fork) from  #
+#  a git repository (e.g. your Gitea instance) onto a fresh server.        #
+#                                                                           #
+#  Modeled on the pterodactyl-installer / pyrodactyl-installer projects:   #
+#  https://github.com/Muspelheim-Hosting/pyrodactyl-installer              #
+#                                                                           #
+#  Supported: Ubuntu 22.04 / 24.04, Debian 11 / 12                          #
+#  Run as root:  bash install-touchdown-panel.sh                            #
+#                                                                           #
+#  Unlike upstream installers that download a pre-built release tarball,    #
+#  this fork's repository is source-only — so this script also installs    #
+#  Node.js 22 + Yarn and builds the frontend assets on the server.         #
+#                                                                           #
+#  NOTE: This installs the PANEL only. Wings is unmodified in this fork —  #
+#  use the official installer for Wings: https://pterodactyl-installer.se  #
+#                                                                           #
+#############################################################################
+
+# ── Configuration (override via environment or answer the prompts) ────────
+GIT_REPO="${GIT_REPO:-}"                      # e.g. https://gitea.example.com/YourUser/touch-down-hosting-panel.git
+GIT_BRANCH="${GIT_BRANCH:-main}"
+PANEL_DIR="${PANEL_DIR:-/var/www/touchdown}"
+FQDN="${FQDN:-}"                              # e.g. panel.touchdownhosting.com
+TIMEZONE="${TIMEZONE:-America/Chicago}"
+ADMIN_EMAIL="${ADMIN_EMAIL:-}"
+ADMIN_USERNAME="${ADMIN_USERNAME:-admin}"
+ADMIN_FIRST="${ADMIN_FIRST:-Touch}"
+ADMIN_LAST="${ADMIN_LAST:-Down}"
+ADMIN_PASSWORD="${ADMIN_PASSWORD:-}"          # leave empty to be prompted
+CONFIGURE_SSL="${CONFIGURE_SSL:-yes}"         # yes = Let's Encrypt via certbot
+DB_NAME="${DB_NAME:-panel}"
+DB_USER="${DB_USER:-touchdown}"
+DB_PASSWORD="${DB_PASSWORD:-$(head /dev/urandom | tr -dc 'A-Za-z0-9' | head -c 32)}"
+PHP_VERSION="8.3"
+
+# ── UI helpers ─────────────────────────────────────────────────────────────
+ORANGE='\033[38;5;208m'
+WHITE='\033[1;37m'
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+RESET='\033[0m'
+
+log()     { echo -e "${ORANGE}[Touch Down]${RESET} $1"; }
+success() { echo -e "${GREEN}[  OK  ]${RESET} $1"; }
+error()   { echo -e "${RED}[ERROR ]${RESET} $1" >&2; }
+banner() {
+  echo -e "${ORANGE}"
+  cat <<'EOF'
+  _____                _        ____
+ |_   _|__  _   _  ___| |__    |  _ \  _____      ___ __
+   | |/ _ \| | | |/ __| '_ \   | | | |/ _ \ \ /\ / / '_ \
+   | | (_) | |_| | (__| | | |  | |_| | (_) \ V  V /| | | |
+   |_|\___/ \__,_|\___|_| |_|  |____/ \___/ \_/\_/ |_| |_|
+                    H  O  S  T  I  N  G
+EOF
+  echo -e "${WHITE}          Panel Installer — Pterodactyl 1.14.1 fork${RESET}\n"
+}
+
+require_root() {
+  if [ "$(id -u)" -ne 0 ]; then
+    error "This script must be run as root (try: sudo bash $0)"
+    exit 1
+  fi
+}
+
+detect_os() {
+  # shellcheck disable=SC1091
+  . /etc/os-release
+  OS_ID="$ID"
+  OS_VERSION="${VERSION_ID%%.*}"
+
+  case "$OS_ID" in
+    ubuntu) [[ "$VERSION_ID" =~ ^(22.04|24.04)$ ]] || { error "Unsupported Ubuntu version: $VERSION_ID"; exit 1; } ;;
+    debian) [[ "$OS_VERSION" =~ ^(11|12)$ ]] || { error "Unsupported Debian version: $VERSION_ID"; exit 1; } ;;
+    *) error "Unsupported OS: $OS_ID (Ubuntu 22.04/24.04 or Debian 11/12 required)"; exit 1 ;;
+  esac
+  success "Detected $PRETTY_NAME"
+}
+
+prompt_config() {
+  [ -z "$GIT_REPO" ] && read -rp "Git repository URL of your panel (Gitea): " GIT_REPO
+  [ -z "$FQDN" ] && read -rp "Panel domain / FQDN (e.g. panel.example.com): " FQDN
+  [ -z "$ADMIN_EMAIL" ] && read -rp "Admin account email: " ADMIN_EMAIL
+  if [ -z "$ADMIN_PASSWORD" ]; then
+    read -rsp "Admin account password: " ADMIN_PASSWORD; echo
+  fi
+
+  if [ -z "$GIT_REPO" ] || [ -z "$FQDN" ] || [ -z "$ADMIN_EMAIL" ] || [ -z "$ADMIN_PASSWORD" ]; then
+    error "Repository URL, FQDN, admin email and admin password are all required."
+    exit 1
+  fi
+
+  echo
+  log "Installing from:  $GIT_REPO ($GIT_BRANCH)"
+  log "Install path:     $PANEL_DIR"
+  log "Panel URL:        https://$FQDN"
+  log "Database:         $DB_NAME (user: $DB_USER)"
+  log "Let's Encrypt:    $CONFIGURE_SSL"
+  echo
+  read -rp "Continue with these settings? [y/N] " confirm
+  [[ "$confirm" =~ ^[Yy] ]] || exit 0
+}
+
+# ── Dependencies ───────────────────────────────────────────────────────────
+install_dependencies() {
+  log "Installing system dependencies..."
+  export DEBIAN_FRONTEND=noninteractive
+  apt-get update -qq
+  apt-get install -y -qq software-properties-common curl ca-certificates gnupg apt-transport-https \
+    lsb-release git tar unzip cron
+
+  # PHP repository (Ondrej PPA on Ubuntu, Sury on Debian)
+  if [ "$OS_ID" = "ubuntu" ]; then
+    LC_ALL=C.UTF-8 add-apt-repository -y ppa:ondrej/php
+  else
+    curl -sSLo /usr/share/keyrings/deb.sury.org-php.gpg https://packages.sury.org/php/apt.gpg
+    echo "deb [signed-by=/usr/share/keyrings/deb.sury.org-php.gpg] https://packages.sury.org/php/ $(lsb_release -sc) main" \
+      > /etc/apt/sources.list.d/sury-php.list
+  fi
+
+  # Node.js 22 (required to build the panel frontend)
+  curl -fsSL https://deb.nodesource.com/setup_22.x | bash - >/dev/null
+
+  apt-get update -qq
+  apt-get install -y -qq \
+    "php${PHP_VERSION}" "php${PHP_VERSION}-fpm" "php${PHP_VERSION}-cli" "php${PHP_VERSION}-gd" \
+    "php${PHP_VERSION}-mysql" "php${PHP_VERSION}-mbstring" "php${PHP_VERSION}-bcmath" \
+    "php${PHP_VERSION}-xml" "php${PHP_VERSION}-curl" "php${PHP_VERSION}-zip" "php${PHP_VERSION}-intl" \
+    mariadb-server redis-server nginx nodejs
+
+  npm install -g yarn >/dev/null 2>&1 || true
+
+  # Composer 2
+  curl -sS https://getcomposer.org/installer | php -- --install-dir=/usr/local/bin --filename=composer
+
+  systemctl enable --now mariadb redis-server nginx cron
+  success "Dependencies installed (PHP ${PHP_VERSION}, Node $(node -v), MariaDB, Redis, nginx)"
+}
+
+# ── Database ───────────────────────────────────────────────────────────────
+setup_database() {
+  log "Creating panel database..."
+  mariadb <<SQL
+CREATE DATABASE IF NOT EXISTS \`${DB_NAME}\` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+CREATE USER IF NOT EXISTS '${DB_USER}'@'127.0.0.1' IDENTIFIED BY '${DB_PASSWORD}';
+GRANT ALL PRIVILEGES ON \`${DB_NAME}\`.* TO '${DB_USER}'@'127.0.0.1' WITH GRANT OPTION;
+FLUSH PRIVILEGES;
+SQL
+  success "Database '${DB_NAME}' ready"
+}
+
+# ── Panel: clone + build ───────────────────────────────────────────────────
+install_panel() {
+  log "Cloning Touch Down Hosting panel from ${GIT_REPO}..."
+  mkdir -p "$PANEL_DIR"
+  if [ -d "${PANEL_DIR}/.git" ]; then
+    git -C "$PANEL_DIR" fetch origin && git -C "$PANEL_DIR" checkout "$GIT_BRANCH" && git -C "$PANEL_DIR" pull
+  else
+    git clone --branch "$GIT_BRANCH" --depth 1 "$GIT_REPO" "$PANEL_DIR"
+  fi
+  cd "$PANEL_DIR"
+
+  chmod -R 755 storage/* bootstrap/cache/ 2>/dev/null || true
+  cp -n .env.example .env
+
+  log "Installing PHP dependencies (composer)..."
+  COMPOSER_ALLOW_SUPERUSER=1 composer install --no-dev --optimize-autoloader --no-interaction --quiet
+
+  log "Building frontend assets (this fork is source-only — building on the server)..."
+  yarn install --frozen-lockfile --silent
+  yarn build:production >/dev/null
+  success "Panel source installed and assets built"
+}
+
+configure_panel() {
+  cd "$PANEL_DIR"
+  log "Configuring environment..."
+
+  php artisan key:generate --force
+
+  php artisan p:environment:setup \
+    --author="$ADMIN_EMAIL" \
+    --url="https://${FQDN}" \
+    --timezone="$TIMEZONE" \
+    --cache="redis" \
+    --session="redis" \
+    --queue="redis" \
+    --redis-host="localhost" \
+    --redis-pass="null" \
+    --redis-port="6379" \
+    --settings-ui=true \
+    --no-interaction
+
+  php artisan p:environment:database \
+    --host="127.0.0.1" \
+    --port="3306" \
+    --database="$DB_NAME" \
+    --username="$DB_USER" \
+    --password="$DB_PASSWORD" \
+    --no-interaction
+
+  # Brand the application name (shown in titles/notifications).
+  sed -i 's/^APP_NAME=.*/APP_NAME="Touch Down Hosting"/' .env || echo 'APP_NAME="Touch Down Hosting"' >> .env
+
+  log "Running database migrations (includes the Touch Down trophy system)..."
+  php artisan migrate --seed --force
+
+  log "Creating admin user..."
+  php artisan p:user:make \
+    --email="$ADMIN_EMAIL" \
+    --username="$ADMIN_USERNAME" \
+    --name-first="$ADMIN_FIRST" \
+    --name-last="$ADMIN_LAST" \
+    --password="$ADMIN_PASSWORD" \
+    --admin=1 \
+    --no-interaction
+
+  chown -R www-data:www-data "$PANEL_DIR"
+  success "Panel configured"
+}
+
+# ── Services: cron, queue worker, nginx, SSL ───────────────────────────────
+setup_services() {
+  log "Installing cron schedule and queue worker..."
+  crontab -u www-data -l 2>/dev/null | { cat; echo "* * * * * php ${PANEL_DIR}/artisan schedule:run >> /dev/null 2>&1"; } | sort -u | crontab -u www-data -
+
+  cat > /etc/systemd/system/pteroq.service <<EOF
+[Unit]
+Description=Touch Down Hosting Panel Queue Worker
+After=redis-server.service
+
+[Service]
+User=www-data
+Group=www-data
+Restart=always
+ExecStart=/usr/bin/php ${PANEL_DIR}/artisan queue:work --queue=high,standard,low --sleep=3 --tries=3
+StartLimitInterval=180
+StartLimitBurst=30
+RestartSec=5s
+
+[Install]
+WantedBy=multi-user.target
+EOF
+  systemctl daemon-reload
+  systemctl enable --now pteroq.service
+
+  log "Configuring nginx..."
+  rm -f /etc/nginx/sites-enabled/default
+
+  cat > /etc/nginx/sites-available/touchdown.conf <<EOF
+server {
+    listen 80;
+    server_name ${FQDN};
+
+    root ${PANEL_DIR}/public;
+    index index.php;
+
+    access_log /var/log/nginx/touchdown.app-access.log;
+    error_log  /var/log/nginx/touchdown.app-error.log error;
+
+    client_max_body_size 100m;
+    client_body_timeout 120s;
+
+    sendfile off;
+
+    location / {
+        try_files \$uri \$uri/ /index.php?\$query_string;
+    }
+
+    location ~ \.php\$ {
+        fastcgi_split_path_info ^(.+\.php)(/.+)\$;
+        fastcgi_pass unix:/run/php/php${PHP_VERSION}-fpm.sock;
+        fastcgi_index index.php;
+        include fastcgi_params;
+        fastcgi_param PHP_VALUE "upload_max_filesize = 100M \n post_max_size=100M";
+        fastcgi_param SCRIPT_FILENAME \$document_root\$fastcgi_script_name;
+        fastcgi_param HTTP_PROXY "";
+        fastcgi_intercept_errors off;
+        fastcgi_buffer_size 16k;
+        fastcgi_buffers 4 16k;
+        fastcgi_connect_timeout 300;
+        fastcgi_send_timeout 300;
+        fastcgi_read_timeout 300;
+    }
+
+    location ~ /\.ht {
+        deny all;
+    }
+}
+EOF
+  ln -sf /etc/nginx/sites-available/touchdown.conf /etc/nginx/sites-enabled/touchdown.conf
+  nginx -t && systemctl restart nginx
+
+  if [ "$CONFIGURE_SSL" = "yes" ]; then
+    log "Requesting Let's Encrypt certificate for ${FQDN}..."
+    apt-get install -y -qq certbot python3-certbot-nginx
+    certbot --nginx --redirect -d "$FQDN" -m "$ADMIN_EMAIL" --agree-tos -n || {
+      error "certbot failed — the panel is still reachable over HTTP; re-run certbot manually once DNS resolves."
+    }
+  fi
+  success "Services configured"
+}
+
+summary() {
+  echo
+  echo -e "${ORANGE}══════════════════════════════════════════════════════════════${RESET}"
+  echo -e "${WHITE}  Touch Down Hosting panel installed successfully!${RESET}"
+  echo -e "${ORANGE}══════════════════════════════════════════════════════════════${RESET}"
+  echo -e "  Panel URL:      ${WHITE}https://${FQDN}${RESET}"
+  echo -e "  Admin login:    ${WHITE}${ADMIN_USERNAME} / ${ADMIN_EMAIL}${RESET}"
+  echo -e "  Install path:   ${WHITE}${PANEL_DIR}${RESET}"
+  echo -e "  DB credentials: ${WHITE}${DB_USER} / ${DB_PASSWORD}${RESET}  (database: ${DB_NAME})"
+  echo
+  echo -e "  Next steps:"
+  echo -e "   1. Log in and check the pulsating-logo login flow + Cool Orange theme."
+  echo -e "   2. Install Wings on your game nodes (unmodified — use the official"
+  echo -e "      installer: https://pterodactyl-installer.se)."
+  echo -e "   3. Add custom themes any time: drop .json files in ${PANEL_DIR}/public/themes/"
+  echo -e "   4. Publish Dev-Blog posts by editing resources/scripts/touchdown/devblogs.ts"
+  echo -e "      in your repo, then: git pull && yarn build:production (in ${PANEL_DIR})"
+  echo
+}
+
+# ── Main ───────────────────────────────────────────────────────────────────
+banner
+require_root
+detect_os
+prompt_config
+install_dependencies
+setup_database
+install_panel
+configure_panel
+setup_services
+summary
