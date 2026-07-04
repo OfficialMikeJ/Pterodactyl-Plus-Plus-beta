@@ -39,6 +39,10 @@ echo "[Touch Down] Rebuilding frontend assets..."
 yarn install --frozen-lockfile --silent
 yarn build:production >/dev/null
 
+echo "[Touch Down] Stamping build id..."
+BUILD_HASH="$(git rev-parse --short HEAD)"
+grep -q '^TDH_BUILD=' .env && sed -i "s/^TDH_BUILD=.*/TDH_BUILD=${BUILD_HASH}/" .env || echo "TDH_BUILD=${BUILD_HASH}" >> .env
+
 echo "[Touch Down] Clearing caches and running migrations..."
 $PHP artisan view:clear
 $PHP artisan config:clear

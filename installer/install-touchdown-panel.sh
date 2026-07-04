@@ -25,7 +25,10 @@ set -euo pipefail
 
 # ── Configuration (override via environment or answer the prompts) ────────
 GIT_REPO="${GIT_REPO:-}"                      # e.g. https://gitea.example.com/YourUser/touch-down-hosting-panel.git
-GIT_BRANCH="${GIT_BRANCH:-main}"
+CHANNEL="${CHANNEL:-}"                        # public (main branch, Alpha) | dev (dev branch, internal build)
+GIT_BRANCH="${GIT_BRANCH:-}"                  # derived from CHANNEL unless set explicitly
+AUTO_UPDATE="${AUTO_UPDATE:-}"                # yes/no — defaults: dev=yes, public=no
+DEV_FEATURES_USERS="${DEV_FEATURES_USERS:-}"  # comma-separated emails (dev channel only)
 PANEL_DIR="${PANEL_DIR:-/var/www/touchdown}"
 FQDN="${FQDN:-}"                              # e.g. panel.touchdownhosting.com
 TIMEZONE="${TIMEZONE:-America/Chicago}"
@@ -86,10 +89,35 @@ detect_os() {
 
 prompt_config() {
   [ -z "$GIT_REPO" ] && read -rp "Git repository URL of your panel (Gitea): " GIT_REPO
+
+  if [ -z "$CHANNEL" ]; then
+    echo "Which build channel is this server?"
+    echo "  1) public — customer-facing Alpha build (main branch, manual updates)"
+    echo "  2) dev    — internal dev build (dev branch, nightly auto-update)"
+    read -rp "Channel [1]: " channel_choice
+    case "${channel_choice:-1}" in
+      2) CHANNEL="dev" ;;
+      *) CHANNEL="public" ;;
+    esac
+  fi
+
+  if [ "$CHANNEL" != "public" ] && [ "$CHANNEL" != "dev" ]; then
+    error "CHANNEL must be 'public' or 'dev'."
+    exit 1
+  fi
+
+  [ -z "$GIT_BRANCH" ] && { [ "$CHANNEL" = "dev" ] && GIT_BRANCH="dev" || GIT_BRANCH="main"; }
+  [ -z "$AUTO_UPDATE" ] && { [ "$CHANNEL" = "dev" ] && AUTO_UPDATE="yes" || AUTO_UPDATE="no"; }
+
   [ -z "$FQDN" ] && read -rp "Panel domain / FQDN (e.g. panel.example.com): " FQDN
   [ -z "$ADMIN_EMAIL" ] && read -rp "Admin account email: " ADMIN_EMAIL
   if [ -z "$ADMIN_PASSWORD" ]; then
     read -rsp "Admin account password: " ADMIN_PASSWORD; echo
+  fi
+
+  if [ "$CHANNEL" = "dev" ] && [ -z "$DEV_FEATURES_USERS" ]; then
+    read -rp "Emails allowed to see dev features [${ADMIN_EMAIL}]: " DEV_FEATURES_USERS
+    DEV_FEATURES_USERS="${DEV_FEATURES_USERS:-$ADMIN_EMAIL}"
   fi
 
   if [ -z "$GIT_REPO" ] || [ -z "$FQDN" ] || [ -z "$ADMIN_EMAIL" ] || [ -z "$ADMIN_PASSWORD" ]; then
@@ -99,10 +127,12 @@ prompt_config() {
 
   echo
   log "Installing from:  $GIT_REPO ($GIT_BRANCH)"
+  log "Build channel:    $CHANNEL (auto-update: $AUTO_UPDATE)"
   log "Install path:     $PANEL_DIR"
   log "Panel URL:        https://$FQDN"
   log "Database:         $DB_NAME (user: $DB_USER)"
   log "Let's Encrypt:    $CONFIGURE_SSL"
+  [ "$CHANNEL" = "dev" ] && log "Dev feature users: $DEV_FEATURES_USERS"
   echo
   read -rp "Continue with these settings? [y/N] " confirm
   [[ "$confirm" =~ ^[Yy] ]] || exit 0
@@ -207,7 +237,16 @@ configure_panel() {
     --no-interaction
 
   # Brand the application name (shown in titles/notifications).
-  sed -i 's/^APP_NAME=.*/APP_NAME="Touch Down Hosting"/' .env || echo 'APP_NAME="Touch Down Hosting"' >> .env
+  grep -q '^APP_NAME=' .env && sed -i 's/^APP_NAME=.*/APP_NAME="Touch Down Hosting"/' .env || echo 'APP_NAME="Touch Down Hosting"' >> .env
+
+  # Stamp the build identity (channel, git commit, dev feature whitelist).
+  set_env() {
+    local key="$1" value="$2"
+    grep -q "^${key}=" .env && sed -i "s|^${key}=.*|${key}=${value}|" .env || echo "${key}=${value}" >> .env
+  }
+  set_env "TDH_CHANNEL" "$CHANNEL"
+  set_env "TDH_BUILD" "$(git -C "$PANEL_DIR" rev-parse --short HEAD)"
+  [ "$CHANNEL" = "dev" ] && set_env "DEV_FEATURES_USERS" "$DEV_FEATURES_USERS"
 
   log "Running database migrations (includes the Touch Down trophy system)..."
   php artisan migrate --seed --force
@@ -308,12 +347,52 @@ EOF
   success "Services configured"
 }
 
+# ── Auto-update (systemd timer; default: on for dev, off for public) ──────
+setup_auto_update() {
+  if [ "$AUTO_UPDATE" != "yes" ]; then
+    log "Auto-update disabled for this ${CHANNEL} install — update manually with:"
+    log "  bash ${PANEL_DIR}/installer/update-touchdown-panel.sh"
+    return
+  fi
+
+  log "Enabling nightly auto-update (${GIT_BRANCH} branch)..."
+  cat > /etc/systemd/system/touchdown-update.service <<EOF
+[Unit]
+Description=Touch Down Hosting panel auto-update (${CHANNEL} channel)
+After=network-online.target
+
+[Service]
+Type=oneshot
+Environment=PANEL_DIR=${PANEL_DIR}
+Environment=GIT_BRANCH=${GIT_BRANCH}
+ExecStart=/bin/bash ${PANEL_DIR}/installer/update-touchdown-panel.sh
+EOF
+
+  cat > /etc/systemd/system/touchdown-update.timer <<EOF
+[Unit]
+Description=Nightly Touch Down Hosting panel auto-update
+
+[Timer]
+OnCalendar=*-*-* 04:30:00
+RandomizedDelaySec=15m
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+EOF
+
+  systemctl daemon-reload
+  systemctl enable --now touchdown-update.timer
+  success "Auto-update timer active (nightly at ~04:30 server time)"
+}
+
 summary() {
   echo
   echo -e "${ORANGE}══════════════════════════════════════════════════════════════${RESET}"
   echo -e "${WHITE}  Touch Down Hosting panel installed successfully!${RESET}"
   echo -e "${ORANGE}══════════════════════════════════════════════════════════════${RESET}"
   echo -e "  Panel URL:      ${WHITE}https://${FQDN}${RESET}"
+  echo -e "  Build channel:  ${WHITE}${CHANNEL} (${GIT_BRANCH} branch, auto-update: ${AUTO_UPDATE})${RESET}"
   echo -e "  Admin login:    ${WHITE}${ADMIN_USERNAME} / ${ADMIN_EMAIL}${RESET}"
   echo -e "  Install path:   ${WHITE}${PANEL_DIR}${RESET}"
   echo -e "  DB credentials: ${WHITE}${DB_USER} / ${DB_PASSWORD}${RESET}  (database: ${DB_NAME})"
@@ -338,4 +417,5 @@ setup_database
 install_panel
 configure_panel
 setup_services
+setup_auto_update
 summary

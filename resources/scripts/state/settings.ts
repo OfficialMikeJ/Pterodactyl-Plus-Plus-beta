@@ -7,6 +7,12 @@ export interface SiteSettings {
         enabled: boolean;
         siteKey: string;
     };
+    touchdown: {
+        version: string;
+        channel: 'public' | 'dev';
+        build: string;
+        devFeatures: boolean;
+    };
 }
 
 export interface SettingsStore {

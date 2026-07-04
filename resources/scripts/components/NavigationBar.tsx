@@ -13,6 +13,7 @@ import SpinnerOverlay from '@/components/elements/SpinnerOverlay';
 import Tooltip from '@/components/elements/tooltip/Tooltip';
 import Avatar from '@/components/Avatar';
 import BrandLogo from '@/components/touchdown/BrandLogo';
+import VersionBadge from '@/components/touchdown/VersionBadge';
 import { applyTheme, builtInThemes, fetchThemes, getActiveThemeId, TouchDownTheme } from '@/touchdown/themes';
 
 const RightNavigation = styled.div`
@@ -112,10 +113,11 @@ export default () => {
         <div className={'w-full tdh-glass-strong shadow-md overflow-x-auto overflow-y-visible'}>
             <SpinnerOverlay visible={isLoggingOut} />
             <div className={'mx-auto w-full flex items-center h-[3.5rem] max-w-[1200px]'}>
-                <div id={'logo'} className={'flex-1'}>
-                    <Link to={'/'} className={'flex items-center px-4 no-underline'}>
+                <div id={'logo'} className={'flex-1 flex items-center'}>
+                    <Link to={'/'} className={'flex items-center pl-4 no-underline'}>
                         <BrandLogo variant={'nav'} />
                     </Link>
+                    <VersionBadge />
                 </div>
                 <RightNavigation className={'flex h-full items-center justify-center relative'}>
                     <SearchContainer />
